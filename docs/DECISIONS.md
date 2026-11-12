@@ -501,3 +501,37 @@ The pinned susfs4ksu branch was `gki-android14-6.1` @ `e287d590` (recorded in ca
 
 Note: earlier entries (2026-08-11/12) still mention SUSFS as a then-planned goal — that is historical
 context, superseded by this entry.
+
+---
+
+## 2026-11-12 — Enable KMI-safe in-tree TCP congestion control algorithms and AQM qdiscs (defer out-of-tree BBRv3)
+
+**Decided:** enable `CONFIG_TCP_CONG_ADVANCED=y`, build in-tree TCP congestion algorithms
+(`CONFIG_TCP_CONG_BBR=y`, `WESTWOOD=y`, `HTCP=y`, `VENO=y`, `CDG=y`, with `BIC` explicitly
+unset and `CONFIG_DEFAULT_TCP_CONG="cubic"` preserved), and build in-tree AQM queuing disciplines
+(`CONFIG_NET_SCH_CAKE=y`, `PIE=y`, `FQ_PIE=y`) directly into `vmlinux`. Keep out-of-tree
+congestion-control backports (such as BBRv3) deferred.
+
+**Why:**
+- **Module ABI / KMI safety:** Samsung's `vendor_dlkm` and `system_dlkm` `.ko` modules are checked
+  against GKI `MODVERSIONS` symbol CRCs (`abi_gki_aarch64_galaxy` exports
+  `tcp_register_congestion_control`, `tcp_slow_start`, `tcp_reno_*`). Out-of-tree BBRv3 patches
+  that expand `struct tcp_sock`, `struct tcp_congestion_ops`, `struct rate_sample`, or exceed the
+  fixed 104-byte `icsk_ca_priv` slot alter exported struct CRCs and break stock `.ko` loading when
+  only `boot.img` is flashed.
+- **No external `.ko` emission:** compiling the enabled algorithms and qdiscs strictly as `=y`
+  (and explicitly setting `# CONFIG_TCP_CONG_BIC is not set`, because `BIC` defaults to `=m` inside
+  `if TCP_CONG_ADVANCED` in `net/ipv4/Kconfig`) embeds `tcp_bbr.o`, `tcp_westwood.o`, `tcp_htcp.o`,
+  `tcp_veno.o`, `tcp_cdg.o`, `sch_cake.o`, `sch_pie.o`, and `sch_fq_pie.o` into `vmlinux` without
+  emitting unexpected modules against Kleaf's `module_implicit_outs`.
+- **Safe boot defaults + explicit parity allowlisting:** leaving `CONFIG_DEFAULT_TCP_CONG="cubic"`
+  and `CONFIG_NET_SCH_DEFAULT` unset keeps default boot behavior identical to stock until
+  userspace configures `tcp_congestion_control`, `default_qdisc`, or `tc qdisc` at runtime. Both
+  `scripts/check-defconfig-parity.sh` and `scripts/check-config-parity.sh` allowlist only the exact
+  new symbols and exposed Kconfig menu cascade (`CONFIG_TCP_CONG_*`, `CONFIG_DEFAULT_*`,
+  `CONFIG_NET_SCH_{CAKE,PIE,FQ_PIE}`).
+
+**Would change our mind:** if a BBRv3 backport is verified not to change `struct tcp_sock`,
+`struct tcp_congestion_ops`, `struct rate_sample`, `struct inet_connection_sock`, or any
+`abi_gki_aarch64_galaxy` symbol CRC (verified via GKI ABI / `Module.symvers` comparison), or when
+shipping matched rebuilt `vendor_dlkm` + `system_dlkm` alongside `boot.img`.
